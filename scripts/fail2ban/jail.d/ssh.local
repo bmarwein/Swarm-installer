@@ -1,0 +1,13 @@
+[sshd]
+enabled = true
+port    = ssh
+logpath = %(sshd_log)s
+backend = systemd
+
+# anti brute-force un peu strict mais raisonnable
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+
+# action firewall classique
+banaction = iptables-multiport
