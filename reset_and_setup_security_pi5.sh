@@ -125,24 +125,55 @@ else
 fi
 
 ############################################
-# 5) IP statique sur l’interface filaire
+# 5) IP statique sur l’interface filaire (NetworkManager OU dhcpcd)
 ############################################
 bold "[5/9] IP statique sur $IFACE…"
-if [ -f /etc/dhcpcd.conf ]; then
-  cp -a /etc/dhcpcd.conf /etc/dhcpcd.conf.bak.$(date +%F-%H%M%S)
-fi
-# supprime ancien bloc potentiellement présent
-sed -i "/^interface $IFACE/,\$d" /etc/dhcpcd.conf
-cat <<EOF >> /etc/dhcpcd.conf
 
-interface $IFACE
-static ip_address=$STATIC_IP/$CIDR
-static routers=$GATEWAY
-static domain_name_servers=${UPSTREAM_DNS[*]}
+if command -v nmcli >/dev/null 2>&1; then
+  # ===== NetworkManager (Bookworm par défaut) =====
+  # Crée/replace une connexion statique "eth0-static"
+  if nmcli -t -f NAME connection show | grep -Fxq "eth0-static"; then
+    nmcli con mod eth0-static ipv4.addresses "${STATIC_IP}/${CIDR}" \
+      ipv4.gateway "${GATEWAY}" \
+      ipv4.dns "9.9.9.9,1.1.1.2" \
+      ipv4.method manual ipv6.method ignore autoconnect yes
+  else
+    nmcli con add type ethernet ifname "${IFACE}" con-name eth0-static \
+      ipv4.addresses "${STATIC_IP}/${CIDR}" \
+      ipv4.gateway "${GATEWAY}" \
+      ipv4.dns "9.9.9.9,1.1.1.2" \
+      ipv4.method manual ipv6.method ignore autoconnect yes
+  fi
+
+  # Supprime éventuelle connexion DHCP conflictuelle
+  # (les noms varient: "Wired connection 1", "eth0"…)
+  for C in $(nmcli -t -f NAME,TYPE c s | awk -F: '$2=="ethernet"{print $1}'); do
+    if [ "$C" != "eth0-static" ]; then nmcli con delete "$C" 2>/dev/null || true; fi
+  done
+
+  nmcli con up eth0-static || true
+  sleep 2
+  ok "IP statique appliquée via NetworkManager (${STATIC_IP}/${CIDR}, gw ${GATEWAY})."
+
+elif [ -f /etc/dhcpcd.conf ]; then
+  # ===== Ancien modèle dhcpcd =====
+  cp -a /etc/dhcpcd.conf /etc/dhcpcd.conf.bak.$(date +%F-%H%M%S)
+  sed -i "/^interface ${IFACE}/,\$d" /etc/dhcpcd.conf
+  cat <<EOF >> /etc/dhcpcd.conf
+
+interface ${IFACE}
+static ip_address=${STATIC_IP}/${CIDR}
+static routers=${GATEWAY}
+static domain_name_servers=9.9.9.9 1.1.1.2
 EOF
-systemctl restart dhcpcd || true
-sleep 2
-ok "IP statique appliquée (si tu es en SSH Wi-Fi, reconnecte-toi en Ethernet après reboot)."
+  systemctl restart dhcpcd || true
+  sleep 2
+  ok "IP statique appliquée via dhcpcd (${STATIC_IP}/${CIDR}, gw ${GATEWAY})."
+
+else
+  warn "Ni NetworkManager (nmcli) ni dhcpcd détecté. Installe NM : apt-get install -y network-manager"
+  exit 1
+fi
 
 ############################################
 # 6) Installation AdGuard Home (propre)
